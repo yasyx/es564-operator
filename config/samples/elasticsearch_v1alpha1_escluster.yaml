@@ -1,0 +1,10 @@
+apiVersion: elasticsearch.yasy.run/v1alpha1
+kind: ESCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: es564-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: escluster-sample
+spec:
+  clusterName: elasticsearch564-cluster
+  size: 3
