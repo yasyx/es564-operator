@@ -59,9 +59,9 @@ type ESClusterReconciler struct {
 func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("Starting reconciling ESCluster ....")
-	esCluster := &elasticsearchv1alpha1.ESCluster{}
 
 	// if the ESCluster crd not exists, return and do nothing
+	esCluster := &elasticsearchv1alpha1.ESCluster{}
 	if err := r.Get(ctx, req.NamespacedName, esCluster); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("ESCluster crd not found")
@@ -77,7 +77,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create or update esConfigMap
 	configMap := corev1.ConfigMap{}
-	err := r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-configmap", esCluster.Spec.ClusterName), Namespace: esCluster.Namespace}, &configMap)
+	err := r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-configmap", clusterName), Namespace: esCluster.Namespace}, &configMap)
 	if err != nil && errors.IsNotFound(err) {
 		res, err := createOrUpdateEsConfigMap(ctx, r, esCluster, true)
 		if err != nil {
@@ -97,7 +97,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create headless service for es cluster
 	service := corev1.Service{}
-	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-headless-svc", esCluster.Spec.ClusterName), Namespace: esCluster.Namespace}, &service)
+	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-headless-svc", clusterName), Namespace: esCluster.Namespace}, &service)
 	if err != nil && errors.IsNotFound(err) {
 		if res, err := createHeadlessService(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch headless service err !!!")
@@ -107,7 +107,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create or update statefulSet for es cluster
 	statefulSet := appv1.StatefulSet{}
-	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-ss", esCluster.Spec.ClusterName), Namespace: esCluster.Namespace}, &statefulSet)
+	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-ss", clusterName), Namespace: esCluster.Namespace}, &statefulSet)
 	if err != nil && errors.IsNotFound(err) {
 		if res, err := createStatefulSet(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch statefulList err !!!")
@@ -127,10 +127,10 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, cluster *elasticsearchv1alpha1.ESCluster, create bool) (ctrl.Result, error) {
+func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster, create bool) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	clusterName := cluster.Spec.ClusterName
-	size := cluster.Spec.Size
+	clusterName := esCluster.Spec.ClusterName
+	size := esCluster.Spec.Size
 	var discoveryZenPing []string
 	dataMap := make(map[string]string)
 	for i := 0; i < int(size); i++ {
@@ -138,9 +138,9 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, clus
 		esConfig := ESConfig{}
 		config := esConfig.NewESConfig()
 		config.setClusterName(clusterName)
-		config.setNodeName(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.cluster.local", cluster.Spec.ClusterName, i, cluster.Spec.ClusterName, cluster.Namespace))
-		config.setNetworkPublishHost(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.cluster.local", cluster.Spec.ClusterName, i, cluster.Spec.ClusterName, cluster.Namespace))
-		discoveryZenPing = append(discoveryZenPing, fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.cluster.local:9300", cluster.Spec.ClusterName, i, cluster.Spec.ClusterName, cluster.Namespace))
+		config.setNodeName(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local", clusterName, i, clusterName, esCluster.Namespace))
+		config.setNetworkPublishHost(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local", clusterName, i, clusterName, esCluster.Namespace))
+		discoveryZenPing = append(discoveryZenPing, fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local:9300", clusterName, i, clusterName, esCluster.Namespace))
 		config.setDiscoveryZenPing(discoveryZenPing)
 		marshal, err := yaml.Marshal(config)
 		if err != nil {
@@ -148,11 +148,11 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, clus
 		}
 		dataMap[dataMapKey] = string(marshal)
 	}
-	logger.Info("data map length %d", "dataMap_size", len(dataMap))
+	logger.Info("data map length", "dataMap_size", len(dataMap))
 	configMap := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-configmap", cluster.Spec.ClusterName),
-			Namespace: cluster.Namespace,
+			Name:      fmt.Sprintf("%s-configmap", clusterName),
+			Namespace: esCluster.Namespace,
 			Labels: map[string]string{
 				"app": "es564",
 			},
@@ -161,21 +161,18 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, clus
 	}
 	logger.Info("create or update ConfigMap !!!", "create", create)
 	if create {
-		err := r.Create(ctx, &configMap)
-		if err != nil {
+		if err := r.Create(ctx, &configMap); err != nil {
 			logger.Error(err, "create ConfigMap err !!!")
 			return ctrl.Result{}, err
 		}
 	} else {
-		err := r.Update(ctx, &configMap)
-		if err != nil {
+		if err := r.Update(ctx, &configMap); err != nil {
 			logger.Error(err, "update ConfigMap err !!!")
 			return ctrl.Result{}, err
 		}
 	}
 
-	err := ctrl.SetControllerReference(cluster, &configMap, r.Scheme)
-	if err != nil {
+	if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -214,12 +211,12 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 			},
 		},
 	}
-	err := r.Create(ctx, &service)
-	if err != nil {
+
+	if err := r.Create(ctx, &service); err != nil {
 		return ctrl.Result{}, err
 	}
-	err = ctrl.SetControllerReference(esCluster, &service, r.Scheme)
-	if err != nil {
+
+	if err := ctrl.SetControllerReference(esCluster, &service, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -364,9 +361,7 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 		},
 	}
 
-	err := r.Create(ctx, &statefulSet)
-
-	if err != nil {
+	if err := r.Create(ctx, &statefulSet); err != nil {
 		return ctrl.Result{}, err
 	}
 
