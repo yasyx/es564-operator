@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	appv1 "k8s.io/api/apps/v1"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/json"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -43,6 +45,7 @@ type ESClusterReconciler struct {
 const EsStatefulSetName = "es564-ss"
 const EsHeadlessServiceName = "es564-headless-svc"
 const EsConfigmapName = "es564-cm"
+const EsConfigSumAnnotation = "elasticsearch.yasy.run/config-sum"
 
 //+kubebuilder:rbac:groups=elasticsearch.yasy.run,resources=esclusters,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=elasticsearch.yasy.run,resources=esclusters/status,verbs=get;update;patch
@@ -100,6 +103,12 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
+	marshal, err := json.Marshal(configMap.Data)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	configSum := fmt.Sprintf("%x", md5.Sum(marshal))
+
 	// create headless service for es cluster
 	service := corev1.Service{}
 	err = r.Get(ctx, types.NamespacedName{Name: EsHeadlessServiceName, Namespace: esCluster.Namespace}, &service)
@@ -114,16 +123,25 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	statefulSet := appv1.StatefulSet{}
 	err = r.Get(ctx, types.NamespacedName{Name: EsStatefulSetName, Namespace: esCluster.Namespace}, &statefulSet)
 	if err != nil && errors.IsNotFound(err) {
-		if res, err := createStatefulSet(ctx, r, esCluster); err != nil {
+		if res, err := createStatefulSet(ctx, r, esCluster, configSum); err != nil {
 			logger.Error(err, "create elasticsearch statefulList err !!!")
 			return res, err
 		}
 	} else if err != nil {
-		logger.Error(err, "fetch elasticsearch statefulList err !!!")
+		logger.Error(err, "fetch elasticsearch stateful err !!!")
 	} else {
 		statefulSet.Spec.Replicas = &esCluster.Spec.Size
-		if err := r.Update(ctx, &statefulSet); err != nil {
-			logger.Error(err, "update elasticsearch statefulList err !!!")
+		annotations := statefulSet.Spec.Template.Annotations
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		if annotations[EsConfigSumAnnotation] != configSum {
+			annotations[EsConfigSumAnnotation] = configSum
+			statefulSet.Spec.Template.Annotations = annotations
+			if err := r.Update(ctx, &statefulSet); err != nil {
+				logger.Error(err, "update elasticsearch stateful err !!!")
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -184,13 +202,6 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 			return ctrl.Result{}, err
 		}
 	}
-	//logger.Info("SetControllerReference configMap begin !!!")
-	//if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
-	//	return ctrl.Result{}, err
-	//}
-	//
-	//logger.Info("SetControllerReference configMap end !!!")
-
 	return ctrl.Result{}, nil
 }
 
@@ -241,7 +252,7 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 	return ctrl.Result{}, nil
 }
 
-func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
+func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster, configSum string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	size := esCluster.Spec.Size
 	statefulSet := appv1.StatefulSet{
@@ -262,6 +273,9 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						"app": "es564",
+					},
+					Annotations: map[string]string{
+						EsConfigSumAnnotation: configSum,
 					},
 				},
 				Spec: corev1.PodSpec{
