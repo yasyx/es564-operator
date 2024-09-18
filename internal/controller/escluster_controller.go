@@ -231,14 +231,15 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	size := esCluster.Spec.Size
+	clusterName := esCluster.Spec.ClusterName
 	statefulSet := appv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ss", esCluster.Spec.ClusterName),
+			Name:      fmt.Sprintf("%s-ss", clusterName),
 			Namespace: esCluster.Namespace,
 			Labels:    map[string]string{"app": "es564"},
 		},
 		Spec: appv1.StatefulSetSpec{
-			ServiceName: fmt.Sprintf("%s-headless-svc", esCluster.Spec.ClusterName),
+			ServiceName: fmt.Sprintf("%s-headless-svc", clusterName),
 			Replicas:    &size,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
@@ -351,7 +352,7 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: fmt.Sprintf("%s-configmap", esCluster.Spec.ClusterName),
+										Name: fmt.Sprintf("%s-configmap", clusterName),
 									},
 								},
 							},
