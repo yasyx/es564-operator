@@ -171,15 +171,18 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 			return ctrl.Result{}, err
 		}
 	}
-
+	logger.Info("SetControllerReference configMap begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	logger.Info("SetControllerReference configMap end !!!")
 
 	return ctrl.Result{}, nil
 }
 
 func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	service := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-headless-svc", esCluster.Spec.ClusterName),
@@ -216,13 +219,17 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 		return ctrl.Result{}, err
 	}
 
+	logger.Info("SetControllerReference service begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &service, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
+	logger.Info("SetControllerReference service end !!!")
+
 	return ctrl.Result{}, nil
 }
 
 func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	size := esCluster.Spec.Size
 	statefulSet := appv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -365,9 +372,11 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 		return ctrl.Result{}, err
 	}
 
+	logger.Info("SetControllerReference statefulSet begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &statefulSet, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
+	logger.Info("SetControllerReference statefulSet end !!!")
 
 	return ctrl.Result{}, nil
 }
