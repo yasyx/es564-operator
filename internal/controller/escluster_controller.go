@@ -22,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 	appv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -61,57 +62,65 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// if the ESCluster crd not exists, return and do nothing
 	if err := r.Get(ctx, req.NamespacedName, esCluster); err != nil {
+
+		if errors.IsNotFound(err) {
+			logger.Info("ESCluster crd not found")
+			return ctrl.Result{}, nil
+		}
+
 		logger.Error(err, "unable to fetch ESCluster")
 		return ctrl.Result{}, err
 	}
 	// get esCluster size and name
 	clusterSize := esCluster.Spec.Size
 	clusterName := esCluster.Spec.ClusterName
-
 	logger.Info("esCluster info:", "clusterSize", clusterSize, "clusterName", clusterName)
 
-	// get the existing pods,services and configMap
-
+	// create or update esConfigMap
 	configMapList := corev1.ConfigMapList{}
-	// find the configMap  has a label  app=es564
 	if err := r.List(ctx, &configMapList, client.MatchingLabels{"app": "es564"}); err != nil {
 		logger.Error(err, "unable to list ConfigMap")
 		return ctrl.Result{}, err
 	}
 
-	if len(configMapList.Items) == 0 {
-		_, err := createEsConfigMap(ctx, r, esCluster)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	} else {
-		logger.Info("un support update configMap now !!!")
+	res, err := createOrUpdateEsConfigMap(ctx, r, esCluster, len(configMapList.Items) == 0)
+	if err != nil {
+		return res, err
 	}
-	// find the headless service that is owned by the esCluster
+
+	// create headless service for es cluster
 	serviceList := corev1.ServiceList{}
-	err := r.List(ctx, &serviceList, client.InNamespace(esCluster.Namespace), client.MatchingLabels{"app": "es564"})
+	err = r.List(ctx, &serviceList, client.InNamespace(esCluster.Namespace), client.MatchingLabels{"app": "es564"})
 	if err != nil {
 		logger.Error(err, "fetch elasticsearch headless service err !!!")
 		return ctrl.Result{}, err
 	}
+	logger.Info("esCluster service info:", "serviceList", serviceList.Items)
 	if len(serviceList.Items) == 0 {
-		if _, err := createHeadlessService(ctx, r, esCluster); err != nil {
+		if res, err := createHeadlessService(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch headless service err !!!")
-			return ctrl.Result{}, err
+			return res, err
 		}
 	}
 
-	// find the pods that are owned by the esCluster
+	// create or update statefulSet for es cluster
 	statefulSetList := appv1.StatefulSetList{}
 	if err = r.List(ctx, &statefulSetList, client.InNamespace(esCluster.Namespace), client.MatchingLabels{"app": "es564"}); err != nil {
 		logger.Error(err, "fetch elasticsearch statefulList err !!!")
 		return ctrl.Result{}, err
 	}
-
+	logger.Info("statefulSetList.Items: ", "len", len(statefulSetList.Items))
 	if len(statefulSetList.Items) == 0 {
-		if _, err = createStatefulSet(ctx, r, esCluster); err != nil {
+		if res, err := createStatefulSet(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch statefulList err !!!")
-			return ctrl.Result{}, err
+			return res, err
+		}
+	} else {
+		for _, statefulSet := range statefulSetList.Items {
+			statefulSet.Spec.Replicas = &esCluster.Spec.Size
+			if err := r.Update(ctx, &statefulSet); err != nil {
+				logger.Error(err, "update elasticsearch statefulList err !!!")
+			}
 		}
 	}
 
@@ -120,7 +129,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func createEsConfigMap(ctx context.Context, r *ESClusterReconciler, cluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
+func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, cluster *elasticsearchv1alpha1.ESCluster, create bool) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	clusterName := cluster.Spec.ClusterName
 	size := cluster.Spec.Size
@@ -152,9 +161,23 @@ func createEsConfigMap(ctx context.Context, r *ESClusterReconciler, cluster *ela
 		},
 		Data: dataMap,
 	}
-	err := r.Create(ctx, &configMap)
+	logger.Info("create or update ConfigMap !!!", "create", create)
+	if create {
+		err := r.Create(ctx, &configMap)
+		if err != nil {
+			logger.Error(err, "create ConfigMap err !!!")
+			return ctrl.Result{}, err
+		}
+	} else {
+		err := r.Update(ctx, &configMap)
+		if err != nil {
+			logger.Error(err, "update ConfigMap err !!!")
+			return ctrl.Result{}, err
+		}
+	}
+
+	err := ctrl.SetControllerReference(cluster, &configMap, r.Scheme)
 	if err != nil {
-		logger.Error(err, "create ConfigMap err !!!")
 		return ctrl.Result{}, err
 	}
 
@@ -194,6 +217,10 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, cluster 
 		},
 	}
 	err := r.Create(ctx, &service)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	err = ctrl.SetControllerReference(cluster, &service, r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -340,9 +367,15 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 	}
 
 	err := r.Create(ctx, &statefulSet)
+
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
+	if err := ctrl.SetControllerReference(esCluster, &statefulSet, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -398,5 +431,8 @@ func (config *ESConfig) setDiscoveryZenPing(discoveryZenPing []string) {
 func (r *ESClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&elasticsearchv1alpha1.ESCluster{}).
+		Owns(&appv1.StatefulSet{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }

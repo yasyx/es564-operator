@@ -7,4 +7,4 @@ metadata:
   name: escluster-sample
 spec:
   clusterName: elasticsearch564-cluster
-  size: 3
+  size: 1
