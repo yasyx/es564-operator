@@ -40,12 +40,17 @@ type ESClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+const EsStatefulSetName = "es564-ss"
+const EsHeadlessServiceName = "es564-headless-svc"
+const EsConfigmapName = "es564-cm"
+
 //+kubebuilder:rbac:groups=elasticsearch.yasy.run,resources=esclusters,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=elasticsearch.yasy.run,resources=esclusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=elasticsearch.yasy.run,resources=esclusters/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -77,7 +82,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create or update esConfigMap
 	configMap := corev1.ConfigMap{}
-	err := r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-configmap", clusterName), Namespace: esCluster.Namespace}, &configMap)
+	err := r.Get(ctx, types.NamespacedName{Name: EsConfigmapName, Namespace: esCluster.Namespace}, &configMap)
 	if err != nil && errors.IsNotFound(err) {
 		res, err := createOrUpdateEsConfigMap(ctx, r, esCluster, true)
 		if err != nil {
@@ -97,7 +102,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create headless service for es cluster
 	service := corev1.Service{}
-	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-headless-svc", clusterName), Namespace: esCluster.Namespace}, &service)
+	err = r.Get(ctx, types.NamespacedName{Name: EsHeadlessServiceName, Namespace: esCluster.Namespace}, &service)
 	if err != nil && errors.IsNotFound(err) {
 		if res, err := createHeadlessService(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch headless service err !!!")
@@ -107,7 +112,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// create or update statefulSet for es cluster
 	statefulSet := appv1.StatefulSet{}
-	err = r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-ss", clusterName), Namespace: esCluster.Namespace}, &statefulSet)
+	err = r.Get(ctx, types.NamespacedName{Name: EsStatefulSetName, Namespace: esCluster.Namespace}, &statefulSet)
 	if err != nil && errors.IsNotFound(err) {
 		if res, err := createStatefulSet(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch statefulList err !!!")
@@ -135,12 +140,14 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 	dataMap := make(map[string]string)
 	for i := 0; i < int(size); i++ {
 		dataMapKey := fmt.Sprintf("elasticsearch-%d.yml", i)
+		headlessSvc := fmt.Sprintf("%s-%d.%s.%s.svc.cluster.local", EsStatefulSetName, i, EsHeadlessServiceName, esCluster.Namespace)
+
 		esConfig := ESConfig{}
 		config := esConfig.NewESConfig()
 		config.setClusterName(clusterName)
-		config.setNodeName(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local", clusterName, i, clusterName, esCluster.Namespace))
-		config.setNetworkPublishHost(fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local", clusterName, i, clusterName, esCluster.Namespace))
-		discoveryZenPing = append(discoveryZenPing, fmt.Sprintf("%s-ss-%d.%s-headless-svc.%s.svc.esCluster.local:9300", clusterName, i, clusterName, esCluster.Namespace))
+		config.setNodeName(headlessSvc)
+		config.setNetworkPublishHost(headlessSvc)
+		discoveryZenPing = append(discoveryZenPing, fmt.Sprintf("%s:9300", headlessSvc))
 		config.setDiscoveryZenPing(discoveryZenPing)
 		marshal, err := yaml.Marshal(config)
 		if err != nil {
@@ -151,7 +158,7 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 	logger.Info("data map length", "dataMap_size", len(dataMap))
 	configMap := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-configmap", clusterName),
+			Name:      EsConfigmapName,
 			Namespace: esCluster.Namespace,
 			Labels: map[string]string{
 				"app": "es564",
@@ -159,7 +166,13 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 		},
 		Data: dataMap,
 	}
-	logger.Info("create or update ConfigMap !!!", "create", create)
+
+	logger.Info("SetControllerReference configMap begin !!!")
+	if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	logger.Info("SetControllerReference configMap end !!!")
+
 	if create {
 		if err := r.Create(ctx, &configMap); err != nil {
 			logger.Error(err, "create ConfigMap err !!!")
@@ -171,12 +184,12 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 			return ctrl.Result{}, err
 		}
 	}
-	logger.Info("SetControllerReference configMap begin !!!")
-	if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	logger.Info("SetControllerReference configMap end !!!")
+	//logger.Info("SetControllerReference configMap begin !!!")
+	//if err := ctrl.SetControllerReference(esCluster, &configMap, r.Scheme); err != nil {
+	//	return ctrl.Result{}, err
+	//}
+	//
+	//logger.Info("SetControllerReference configMap end !!!")
 
 	return ctrl.Result{}, nil
 }
@@ -185,7 +198,7 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 	logger := log.FromContext(ctx)
 	service := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-headless-svc", esCluster.Spec.ClusterName),
+			Name:      EsHeadlessServiceName,
 			Namespace: esCluster.Namespace,
 			Labels:    map[string]string{"app": "es564"},
 		},
@@ -215,15 +228,15 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 		},
 	}
 
-	if err := r.Create(ctx, &service); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	logger.Info("SetControllerReference service begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &service, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.Info("SetControllerReference service end !!!")
+
+	if err := r.Create(ctx, &service); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -231,15 +244,14 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	size := esCluster.Spec.Size
-	clusterName := esCluster.Spec.ClusterName
 	statefulSet := appv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ss", clusterName),
+			Name:      EsStatefulSetName,
 			Namespace: esCluster.Namespace,
 			Labels:    map[string]string{"app": "es564"},
 		},
 		Spec: appv1.StatefulSetSpec{
-			ServiceName: fmt.Sprintf("%s-headless-svc", clusterName),
+			ServiceName: EsHeadlessServiceName,
 			Replicas:    &size,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
@@ -352,7 +364,7 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: fmt.Sprintf("%s-configmap", clusterName),
+										Name: EsConfigmapName,
 									},
 								},
 							},
@@ -369,15 +381,15 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 		},
 	}
 
-	if err := r.Create(ctx, &statefulSet); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	logger.Info("SetControllerReference statefulSet begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &statefulSet, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.Info("SetControllerReference statefulSet end !!!")
+
+	if err := r.Create(ctx, &statefulSet); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
