@@ -316,7 +316,8 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 					},
 					Containers: []corev1.Container{
 						{
-							Name:  "elasticsearch",
+							Name: "elasticsearch",
+
 							Image: "elasticsearch:5.6.4",
 							Env: []corev1.EnvVar{
 								{

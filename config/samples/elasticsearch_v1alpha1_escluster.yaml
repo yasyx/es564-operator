@@ -7,4 +7,4 @@ metadata:
   name: escluster-sample
 spec:
   clusterName: es-cluster-sample
-  size: 3
+  size: 1
