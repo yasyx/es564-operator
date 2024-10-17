@@ -395,7 +395,7 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 			},
 		},
 	}
-
+	fmt.Sprintf("%s-%s", esCluster.Name, "elasticsearch")
 	logger.Info("SetControllerReference statefulSet begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &statefulSet, r.Scheme); err != nil {
 		return ctrl.Result{}, err
