@@ -113,7 +113,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	service := corev1.Service{}
 	err = r.Get(ctx, types.NamespacedName{Name: EsHeadlessServiceName, Namespace: esCluster.Namespace}, &service)
 	if err != nil && errors.IsNotFound(err) {
-		if res, err := createHeadlessService(ctx, r, esCluster); err != nil {
+		if res, err := createESHeadlessService(ctx, r, esCluster); err != nil {
 			logger.Error(err, "create elasticsearch headless service err !!!")
 			return res, err
 		}
@@ -123,7 +123,7 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	statefulSet := appv1.StatefulSet{}
 	err = r.Get(ctx, types.NamespacedName{Name: EsStatefulSetName, Namespace: esCluster.Namespace}, &statefulSet)
 	if err != nil && errors.IsNotFound(err) {
-		if res, err := createStatefulSet(ctx, r, esCluster, configSum); err != nil {
+		if res, err := createESStatefulSet(ctx, r, esCluster, configSum); err != nil {
 			logger.Error(err, "create elasticsearch statefulList err !!!")
 			return res, err
 		}
@@ -143,6 +143,14 @@ func (r *ESClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 		}
+	}
+
+	// Update status
+	esCluster.Status.Replicas = statefulSet.Status.Replicas
+
+	err = r.Status().Update(ctx, esCluster)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	logger.Info("End reconciling EsCluster....")
@@ -205,7 +213,7 @@ func createOrUpdateEsConfigMap(ctx context.Context, r *ESClusterReconciler, esCl
 	return ctrl.Result{}, nil
 }
 
-func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
+func createESHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	service := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -252,7 +260,7 @@ func createHeadlessService(ctx context.Context, r *ESClusterReconciler, esCluste
 	return ctrl.Result{}, nil
 }
 
-func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster, configSum string) (ctrl.Result, error) {
+func createESStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *elasticsearchv1alpha1.ESCluster, configSum string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	size := esCluster.Spec.Size
 	statefulSet := appv1.StatefulSet{
@@ -395,7 +403,7 @@ func createStatefulSet(ctx context.Context, r *ESClusterReconciler, esCluster *e
 			},
 		},
 	}
-	fmt.Sprintf("%s-%s", esCluster.Name, "elasticsearch")
+	fmt.Printf("%s-%s", esCluster.Name, "elasticsearch")
 	logger.Info("SetControllerReference statefulSet begin !!!")
 	if err := ctrl.SetControllerReference(esCluster, &statefulSet, r.Scheme); err != nil {
 		return ctrl.Result{}, err

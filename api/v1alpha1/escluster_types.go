@@ -24,6 +24,7 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ESClusterSpec defines the desired state of ESCluster
+
 type ESClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -34,13 +35,16 @@ type ESClusterSpec struct {
 }
 
 // ESClusterStatus defines the observed state of ESCluster
+
 type ESClusterStatus struct {
+	Replicas int32 `json:"replicas"`
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name=Replicas,JSONPath=.status.replicas,type=integer,description=Number of replicas
 
 // ESCluster is the Schema for the esclusters API
 type ESCluster struct {
